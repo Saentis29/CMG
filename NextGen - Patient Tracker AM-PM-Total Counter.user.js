@@ -3,6 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.1
 // @description  Counts total, AM, PM patients and 'done' patients for the day on Patient Tracker (robust done/no-show logic)
+// @updateURL    https://github.com/Saentis29/CMG/edit/main/NextGen%20-%20Patient%20Tracker%20AM-PM-Total%20Counter.user.js
+// @downloadURL  https://github.com/Saentis29/CMG/edit/main/NextGen%20-%20Patient%20Tracker%20AM-PM-Total%20Counter.user.js
 // @match        https://*.healthfusionclaims.com/*
 // @grant        none
 // ==/UserScript==
