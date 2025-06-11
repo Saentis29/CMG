@@ -3,6 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.2
 // @description  Adds "Done" button beside Close to accept and complete tasks with auto-confirm
+// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20-%20Done%20Button%20for%20Tasks%20(Auto%20Confirm).user.js
+// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20-%20Done%20Button%20for%20Tasks%20(Auto%20Confirm).user.js
 // @match        *://*.healthfusionclaims.com/*
 // @grant        none
 // ==/UserScript==
