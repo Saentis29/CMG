@@ -11,8 +11,8 @@
 // @connect      *
 // @run-at       document-idle
 // @require      https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js
-// @updateURL    https://raw.githubusercontent.com/Saentis29/CMG/nextgen-copay-autofill.user.js
-// @downloadURL  https://raw.githubusercontent.com/Saentis29/repo/main/nextgen-copay-autofill.user.js
+// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/nextgen-copay-autofill.user.js
+// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/nextgen-copay-autofill.user.js
 // ==/UserScript==
 
 (function(){
