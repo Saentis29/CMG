@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         NextGen Insurance Verification - individual
+// @name         ZZ NextGen Insurance Verification - individual
 // @namespace    https://pilatus.app/tm
-// @version      2.7.0
+// @version      2.7.7
 // @description  Automatically extract copay from eligibility PDF, check secondary if needed, create alert, and fill in insurance form
 // @author       David Luebbert, MD
 // @match        https://*.healthfusionclaims.com/*
@@ -13,6 +13,8 @@
 // @require      https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js
 // @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20Insurance%20Verification%20-%20individual.js
 // @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20Insurance%20Verification%20-%20individual.js
+// @license      MIT
+// @copyright    2025, David Luebbert, MD
 // ==/UserScript==
 
 /**
@@ -207,6 +209,7 @@
       patterns: [
         /([^[\]]+)\[([^\]]+BCBS PROVIDERS[^\]]*)\]:[\$]?([\d,]+(?:\.\d{2})?%?)/g,
         /([^[\]]+)\[([^\]]+)\s+\((\d+)\)[^\]]*IN NETWORK[^\]]*\]:[\$]?([\d,]+(?:\.\d{2})?%?)/g,
+        /([^[\]]+)\[([^\]]+)\]:[\$]?([\d,]+(?:\.\d{2})?%?)/g,  // Direct Service[DETAILS]:$amount format
         /([^[\]:]+):\s*[^[\]]*\[([^\]]+)\]:[\$]?([\d,]+(?:\.\d{2})?%?)/g
       ],
       networkIndicators: ['BCBS PROVIDERS', 'IN NETWORK', 'BLUECHOICE'],
@@ -602,7 +605,7 @@ Next Appt: ${nextAppt}
    * @param {string} pdfText - Full PDF text content
    * @returns {object} - Extracted copay/coinsurance values
    */
-  function extractCopayInfo(pdfText) {
+  async function extractCopayInfo(pdfText) {
     // Normalize whitespace
     const normalized = pdfText
       .replace(/\s+/g, ' ')
@@ -781,14 +784,21 @@ Next Appt: ${nextAppt}
           }
         }
 
-        // Prioritize explicit primary care mentions
-        if (detailsUpper.includes('PRIMARY CARE') || detailsUpper.includes('PCP')) {
+        // Prioritize explicit primary care mentions in details
+        if (detailsUpper.includes('PRIMARY CARE PHYSICIAN')) {
+          score += 15; // Higher bonus for explicit "PRIMARY CARE PHYSICIAN"
+        } else if (detailsUpper.includes('PRIMARY CARE') || detailsUpper.includes('PCP')) {
           score += 5;
         }
 
         // EXCLUDE infusion therapy - not a regular office visit
         if (detailsUpper.includes('INFUSION')) {
           score -= 50; // Heavy penalty for infusion therapy
+        }
+
+        // EXCLUDE specialist visits - not primary care
+        if (detailsUpper.includes('SPECIALIST')) {
+          score -= 100; // Heavy penalty for specialist (not primary care)
         }
 
         // BOOST regular office visit/clinic/home visit
@@ -803,7 +813,7 @@ Next Appt: ${nextAppt}
           score += 1;
         }
 
-        console.log(`[Copay Autofill] Primary care candidate: ${m.service} | Score: ${score}${hasExactMatch ? ' (EXACT MATCH)' : ''} | Amount: ${m.isPercentage ? m.amount + '%' : '$' + m.amount}`);
+        console.log(`[Copay Autofill] Primary care candidate: ${m.service} [${m.details}] | Score: ${score}${hasExactMatch ? ' (EXACT MATCH)' : ''} | Amount: ${m.isPercentage ? m.amount + '%' : '$' + m.amount}`);
 
         // Store in debug log
         debugLog.primaryCandidates.push({
@@ -814,7 +824,12 @@ Next Appt: ${nextAppt}
           details: m.details
         });
 
-        if (score > bestPrimaryScore || (score === bestPrimaryScore && !bestPrimaryCopay)) {
+        // Update if: higher score, OR same score but this one has PRIMARY CARE PHYSICIAN in details, OR same score and lower amount
+        const isBetter = score > bestPrimaryScore ||
+          (score === bestPrimaryScore && detailsUpper.includes('PRIMARY CARE PHYSICIAN') && !bestPrimaryCopay?.details.toUpperCase().includes('PRIMARY CARE PHYSICIAN')) ||
+          (score === bestPrimaryScore && !bestPrimaryCopay);
+
+        if (isBetter) {
           bestPrimaryScore = score;
           bestPrimaryCopay = m;
           if (m.isPercentage) {
@@ -871,6 +886,51 @@ Next Appt: ${nextAppt}
 
     console.log('[Copay Autofill] Primary care:', { copay: primaryCopay, coinsurance: primaryCoins });
     console.log('[Copay Autofill] Urgent care:', { copay: urgentCopay, coinsurance: urgentCoins });
+    console.log('⏸️  PAUSED - Check console logs above for all matches and scores. Click the RESUME button to continue...');
+
+    // Create resume button overlay
+    const resumeOverlay = document.createElement('div');
+    resumeOverlay.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 999999;
+        background: white;
+        padding: 30px;
+        border: 3px solid #ff6b6b;
+        border-radius: 10px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        text-align: center;
+    `;
+    resumeOverlay.innerHTML = `
+        <div style="font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #ff6b6b;">
+            ⏸️ PAUSED FOR DEBUGGING
+        </div>
+        <div style="margin-bottom: 20px; color: #666;">
+            Check console logs for PDF extraction details
+        </div>
+        <button id="resumeButton" style="
+            padding: 12px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        ">▶️ RESUME SCRIPT</button>
+    `;
+    document.body.appendChild(resumeOverlay);
+
+    // Wait for resume button click
+    await new Promise(resolve => {
+      document.getElementById('resumeButton').addEventListener('click', () => {
+        resumeOverlay.remove();
+        console.log('▶️  RESUMED - Continuing script...');
+        resolve();
+      });
+    });
 
     return {
       primaryCopay,
@@ -934,7 +994,7 @@ Next Appt: ${nextAppt}
       console.log('[Copay Autofill] PDF text length:', pdfText.length);
 
       const parseStart = Date.now();
-      const { primaryCopay, primaryCoins, urgentCopay, urgentCoins } = extractCopayInfo(pdfText);
+      const { primaryCopay, primaryCoins, urgentCopay, urgentCoins } = await extractCopayInfo(pdfText);
       debugLog.parseTime = Date.now() - parseStart;
       console.log('[Copay Autofill] PDF parsing took:', debugLog.parseTime, 'ms');
 
@@ -1041,7 +1101,7 @@ Next Appt: ${nextAppt}
       // Fetch and parse PDF
       const pdfText = await fetchPdfTextRobust(cacheBust(pdfUrl), PDF_FETCH_OPTS);
 
-      const { primaryCopay: secCopay, primaryCoins: secCoins } = extractCopayInfo(pdfText);
+      const { primaryCopay: secCopay, primaryCoins: secCoins } = await extractCopayInfo(pdfText);
 
       console.log('[Copay Autofill] Secondary extracted:', { copay: secCopay, coinsurance: secCoins });
 
