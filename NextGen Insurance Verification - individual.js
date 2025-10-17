@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         ZZ NextGen Insurance Verification - individual
+// @name         NextGen Insurance Verification - individual
 // @namespace    https://pilatus.app/tm
 // @version      2.7.0
 // @description  Automatically extract copay from eligibility PDF, check secondary if needed, create alert, and fill in insurance form
@@ -11,8 +11,8 @@
 // @connect      *
 // @run-at       document-idle
 // @require      https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js
-// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/nextgen-copay-autofill.user.js
-// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/nextgen-copay-autofill.user.js
+// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20Insurance%20Verification%20-%20individual.js
+// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20Insurance%20Verification%20-%20individual.js
 // ==/UserScript==
 
 /**
