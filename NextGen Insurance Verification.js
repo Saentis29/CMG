@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         ZZ NextGen Insurance Verification
+// @name         NextGen Insurance Verification (Batch)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.7
+// @version      1.6.0
 // @description  Automatically verify insurance for all patients on Today's Appointments
 // @author       David Luebbert, MD
 // @match        https://txn2.healthfusionclaims.com/electronic/*
@@ -223,12 +223,18 @@
     const COPAY_DATA_KEY = 'insuranceVerify:copayData';
     const SECONDARY_CHECK_KEY = 'insuranceVerify:checkSecondary';
     const INSURANCE_LEVEL_KEY = 'insuranceVerify:insuranceLevel'; // 'primary' or 'secondary'
+    const PENDING_START_KEY = 'insuranceVerify:pendingStart'; // Flag to auto-start after ALL RESOURCES reload
 
     // Configuration for alert notes
     const ALERT_CONFIG = {
         ENABLE_ALERT_NOTES: true,
         ALERT_ON_SCHEDULING: true,   // Enable "Alert on Scheduling" checkbox
         ALERT_ON_BILLING: true        // Enable "Alert on Billing" checkbox
+    };
+
+    // Debug configuration
+    const DEBUG_CONFIG = {
+        ENABLE_PAUSE_FOR_DEBUGGING: false  // Set to true to enable pause after PDF extraction
     };
 
     /** -----------------------------
@@ -663,51 +669,55 @@ Next Appt: ${appointment}
 
         console.log('[DEBUG] Primary care:', { copay: primaryCopay, coinsurance: primaryCoins });
         console.log('[DEBUG] Urgent care:', { copay: urgentCopay, coinsurance: urgentCoins });
-        console.log('⏸️  PAUSED - Check console logs above for all matches and scores. Click the RESUME button to continue...');
 
-        // Create resume button overlay
-        const resumeOverlay = document.createElement('div');
-        resumeOverlay.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            z-index: 999999;
-            background: white;
-            padding: 30px;
-            border: 3px solid #ff6b6b;
-            border-radius: 10px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-            text-align: center;
-        `;
-        resumeOverlay.innerHTML = `
-            <div style="font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #ff6b6b;">
-                ⏸️ PAUSED FOR DEBUGGING
-            </div>
-            <div style="margin-bottom: 20px; color: #666;">
-                Check console logs for PDF extraction details
-            </div>
-            <button id="resumeButton" style="
-                padding: 12px 30px;
-                font-size: 16px;
-                font-weight: bold;
-                background: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                cursor: pointer;
-            ">▶️ RESUME SCRIPT</button>
-        `;
-        document.body.appendChild(resumeOverlay);
+        // Optional pause for debugging (disabled by default)
+        if (DEBUG_CONFIG.ENABLE_PAUSE_FOR_DEBUGGING) {
+            console.log('⏸️  PAUSED - Check console logs above for all matches and scores. Click the RESUME button to continue...');
 
-        // Wait for resume button click
-        await new Promise(resolve => {
-            document.getElementById('resumeButton').addEventListener('click', () => {
-                resumeOverlay.remove();
-                console.log('▶️  RESUMED - Continuing script...');
-                resolve();
+            // Create resume button overlay
+            const resumeOverlay = document.createElement('div');
+            resumeOverlay.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                z-index: 999999;
+                background: white;
+                padding: 30px;
+                border: 3px solid #ff6b6b;
+                border-radius: 10px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                text-align: center;
+            `;
+            resumeOverlay.innerHTML = `
+                <div style="font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #ff6b6b;">
+                    ⏸️ PAUSED FOR DEBUGGING
+                </div>
+                <div style="margin-bottom: 20px; color: #666;">
+                    Check console logs for PDF extraction details
+                </div>
+                <button id="resumeButton" style="
+                    padding: 12px 30px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    background: #4CAF50;
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                ">▶️ RESUME SCRIPT</button>
+            `;
+            document.body.appendChild(resumeOverlay);
+
+            // Wait for resume button click
+            await new Promise(resolve => {
+                document.getElementById('resumeButton').addEventListener('click', () => {
+                    resumeOverlay.remove();
+                    console.log('▶️  RESUMED - Continuing script...');
+                    resolve();
+                });
             });
-        });
+        }
 
         return {
             primaryCopay,
@@ -770,29 +780,72 @@ Next Appt: ${appointment}
                 if (memberIdMatch) {
                     const memberId = memberIdMatch[1];
 
-                    // Extract patient name from the same cell or nearby
-                    const nameCell = row.querySelector('a[title="View Eligibility Response"]');
-                    const patientName = nameCell ? nameCell.textContent.trim() : 'Unknown';
-
-                    // Extract appointment time (first cell with time)
+                    // Extract appointment time and cells
                     const cells = row.querySelectorAll('td');
+
+                    // Extract patient name - try multiple methods
+                    let patientName = 'Unknown';
+
+                    // Method 1: Look for eligibility response link
+                    const eligibilityLink = row.querySelector('a[title="View Eligibility Response"]');
+                    if (eligibilityLink) {
+                        patientName = eligibilityLink.textContent.trim();
+                    } else if (cells.length > 3) {
+                        // Method 2: Get from 4th cell (index 3), which contains the name after the green checkmark
+                        const nameCell = cells[3];
+                        const nameText = nameCell.textContent.trim();
+                        // Remove any leading/trailing whitespace and filter out the image alt text
+                        const nameParts = nameText.split('\n').map(s => s.trim()).filter(s => s && s !== '');
+                        if (nameParts.length > 0) {
+                            patientName = nameParts[nameParts.length - 1]; // Last non-empty part is usually the name
+                        }
+                    }
                     const appointmentTime = cells.length > 0 ? cells[0].textContent.trim() : '';
 
-                    // Extract provider (usually in a cell near the end)
-                    let provider = '';
-                    cells.forEach(cell => {
-                        const text = cell.textContent.trim();
-                        // Look for provider names (they typically have comma format: LAST, FIRST)
-                        if (text.includes(',') && text.split(',').length === 2 && !text.includes('BLOCKED')) {
-                            provider = text;
+                    // Extract appointment type (usually 5th cell - index 4)
+                    let appointmentType = '';
+                    if (cells.length > 4) {
+                        const typeCell = cells[4];
+                        // Get the first div which contains the appointment type
+                        const firstDiv = typeCell.querySelector('div');
+                        if (firstDiv) {
+                            appointmentType = firstDiv.textContent.trim();
+                        } else {
+                            appointmentType = typeCell.textContent.trim().split('\n')[0].trim();
                         }
-                    });
+                    }
 
-                    // Extract status (last few cells usually contain status)
+                    // Extract provider (usually 6th cell - index 5)
+                    let provider = '';
+                    if (cells.length > 5) {
+                        provider = cells[5].textContent.trim().replace(/<br>/g, '').split('\n')[0].trim();
+                    }
+
+                    // Extract status (usually 7th cell - index 6)
                     let appointmentStatus = '';
                     if (cells.length > 6) {
-                        appointmentStatus = cells[cells.length - 3].textContent.trim();
+                        appointmentStatus = cells[6].textContent.trim().replace(/<br>/g, '').split('\n')[0].trim();
                     }
+
+                    // Get the date from the filter
+                    const dateInput = document.getElementById('FILTER_DATE');
+                    const appointmentDate = dateInput ? dateInput.value : '';
+
+                    // Shorten appointment type
+                    let shortType = appointmentType
+                        .replace(/MEDICARE WELLNESS VISIT/gi, 'MWV')
+                        .replace(/HOSPITAL FU/gi, 'Hosp FU')
+                        .replace(/ER FU/gi, 'ER FU')
+                        .replace(/PHYSICAL EXAM/gi, 'PE')
+                        .replace(/OVER 40/gi, '>40')
+                        .replace(/NEW PATIENT/gi, 'New Pt')
+                        .replace(/ESTABLISHED/gi, 'Est')
+                        .replace(/PATIENT/gi, 'Pt');
+
+                    // Format as "DATE TIME - TYPE - PROVIDER"
+                    const formattedAppointment = appointmentDate && appointmentTime && shortType && provider
+                        ? `${appointmentDate} ${appointmentTime} - ${shortType} - ${provider}`
+                        : '';
 
                     patients.push({
                         memberId: memberId,
@@ -800,7 +853,8 @@ Next Appt: ${appointment}
                         chartLink: href,
                         appointmentTime: appointmentTime,
                         provider: provider,
-                        status: appointmentStatus
+                        status: appointmentStatus,
+                        appointmentInfo: formattedAppointment  // Full formatted appointment string
                     });
                 }
             }
@@ -890,7 +944,7 @@ Next Appt: ${appointment}
 
                     console.log(`PDF text length: ${pdfText.length} chars`);
 
-                    const { primaryCopay, primaryCoins, urgentCopay, urgentCoins, allMatches } = extractCopayInfo(pdfText);
+                    const { primaryCopay, primaryCoins, urgentCopay, urgentCoins, allMatches } = await extractCopayInfo(pdfText);
 
                     console.log(`Extracted copay data:`, {
                         primaryCopay,
@@ -900,7 +954,148 @@ Next Appt: ${appointment}
                         matchCount: allMatches.length
                     });
 
-                    updateStatus({ task: '✓ Verification complete!' });
+                    updateStatus({ task: '✓ PDF parsed, fetching balance and appointment...' });
+
+                    // Fetch patient chart page to extract balance and appointment
+                    let guarantorBalance = '$0.00';
+                    let nextAppointment = 'No appointment found';
+
+                    try {
+                        const chartUrl = `https://txn2.healthfusionclaims.com/electronic/pm/patient_chart.jsp?MEMBER_ID=${patient.memberId}`;
+                        console.log('[Behind-scenes] Fetching patient chart for balance/appointment:', chartUrl);
+
+                        const chartHtml = await new Promise((resolve, reject) => {
+                            GM_xmlhttpRequest({
+                                method: 'GET',
+                                url: chartUrl,
+                                onload: (response) => {
+                                    console.log('[Behind-scenes] Chart page fetched, status:', response.status);
+                                    resolve(response.responseText);
+                                },
+                                onerror: (error) => {
+                                    console.error('[Behind-scenes] Failed to fetch chart page:', error);
+                                    reject(error);
+                                },
+                                timeout: 10000
+                            });
+                        });
+
+                        // Parse HTML to extract balance and appointment
+                        console.log('[Behind-scenes] Parsing chart HTML, length:', chartHtml.length);
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(chartHtml, 'text/html');
+
+                        // Extract balance - it's in an iframe, find the iframe URL
+                        const balanceIframe = doc.getElementById('balances') || doc.querySelector('iframe[name="balances"]');
+
+                        if (balanceIframe) {
+                            const iframeSrc = balanceIframe.getAttribute('src');
+                            console.log('[Behind-scenes] Found balance iframe, src:', iframeSrc);
+
+                            if (iframeSrc) {
+                                try {
+                                    // Fetch the iframe content
+                                    let balanceUrl;
+                                    if (iframeSrc.startsWith('http')) {
+                                        balanceUrl = iframeSrc;
+                                    } else if (iframeSrc.startsWith('/')) {
+                                        // Absolute path from root
+                                        balanceUrl = `https://txn2.healthfusionclaims.com${iframeSrc}`;
+                                    } else {
+                                        // Relative path
+                                        balanceUrl = `https://txn2.healthfusionclaims.com/electronic/pm/${iframeSrc}`;
+                                    }
+
+                                    console.log('[Behind-scenes] Fetching balance iframe:', balanceUrl);
+
+                                    const balanceHtml = await new Promise((resolve, reject) => {
+                                        GM_xmlhttpRequest({
+                                            method: 'GET',
+                                            url: balanceUrl,
+                                            onload: (response) => {
+                                                console.log('[Behind-scenes] Balance iframe fetched, status:', response.status, 'length:', response.responseText.length);
+                                                resolve(response.responseText);
+                                            },
+                                            onerror: (error) => {
+                                                console.error('[Behind-scenes] Failed to fetch balance iframe:', error);
+                                                reject(error);
+                                            },
+                                            timeout: 5000
+                                        });
+                                    });
+
+                                    // Parse the iframe HTML
+                                    const balanceDoc = parser.parseFromString(balanceHtml, 'text/html');
+                                    const balanceRows = balanceDoc.querySelectorAll('tr');
+                                    console.log('[Behind-scenes] Found', balanceRows.length, 'rows in balance iframe');
+
+                                    for (const row of balanceRows) {
+                                        const rowText = row.textContent;
+                                        if (rowText.includes('Guarantor Balance')) {
+                                            console.log('[Behind-scenes] Found Guarantor Balance row in iframe, text:', rowText);
+
+                                            // Try all cells in the row
+                                            const cells = row.querySelectorAll('td');
+                                            console.log('[Behind-scenes] Row has', cells.length, 'cells');
+
+                                            for (const cell of cells) {
+                                                const cellText = cell.textContent.trim();
+                                                console.log('[Behind-scenes] Cell text:', cellText);
+                                                const match = cellText.match(/\$\d+(?:,\d{3})*(?:\.\d{2})?/);
+                                                if (match) {
+                                                    guarantorBalance = match[0];
+                                                    console.log('[Behind-scenes] ✓ Extracted balance from iframe:', guarantorBalance);
+                                                    break;
+                                                }
+                                            }
+                                            if (guarantorBalance !== '$0.00') break;
+                                        }
+                                    }
+                                } catch (iframeError) {
+                                    console.warn('[Behind-scenes] Failed to fetch balance iframe:', iframeError);
+                                }
+                            }
+                        } else {
+                            console.warn('[Behind-scenes] Balance iframe not found in chart HTML');
+                        }
+
+                        if (guarantorBalance === '$0.00') {
+                            console.warn('[Behind-scenes] Guarantor Balance not found');
+                        }
+
+                        // Use appointment info that was already extracted from the Today's Appointments page
+                        if (patient.appointmentInfo) {
+                            nextAppointment = patient.appointmentInfo;
+                            console.log('[Behind-scenes] ✓ Using appointment from initial page:', nextAppointment);
+                        } else {
+                            console.log('[Behind-scenes] No appointment info available for this patient');
+                            nextAppointment = '';
+                        }
+                    } catch (fetchError) {
+                        console.error('[Behind-scenes] Failed to fetch/parse chart page:', fetchError);
+                    }
+
+                    console.log('[Behind-scenes] Final balance:', guarantorBalance);
+                    console.log('[Behind-scenes] Final appointment:', nextAppointment);
+
+                    // Create alert note and input copay/coinsurance into insurance form
+                    try {
+                        await inputCopayCoinsurance(
+                            patient,
+                            primaryCopay || '',
+                            primaryCoins || '',
+                            urgentCopay || '',
+                            urgentCoins || '',
+                            guarantorBalance,
+                            nextAppointment
+                        );
+                        console.log(`Successfully created alert and input copay for ${patient.name}`);
+                        updateStatus({ task: '✓ Alert created and copay input complete!' });
+                    } catch (inputError) {
+                        console.warn(`Failed to input copay for ${patient.name}:`, inputError);
+                        updateStatus({ task: '⚠ PDF parsed but copay input failed' });
+                        // Continue anyway - we still have the data for CSV
+                    }
 
                     return {
                         success: true,
@@ -911,7 +1106,9 @@ Next Appt: ${appointment}
                             primaryCopay: primaryCopay || '',
                             primaryCoins: primaryCoins || '',
                             urgentCopay: urgentCopay || '',
-                            urgentCoins: urgentCoins || ''
+                            urgentCoins: urgentCoins || '',
+                            guarantorBalance: guarantorBalance,
+                            nextAppointment: nextAppointment
                         }
                     };
                 } catch (pdfError) {
@@ -1163,18 +1360,61 @@ Next Appt: ${appointment}
                         font-size: 12px;
                         margin-bottom: 8px;
                     ">
-                    <div style="margin-bottom: 10px; padding: 8px; background: #f0f9ff; border: 1px solid #0284c7; border-radius: 4px;">
-                        <label style="display: flex; align-items: center; cursor: pointer; font-size: 12px;">
-                            <input type="checkbox" id="physicalNavToggle" style="margin-right: 6px;">
-                            <span style="color: #0369a1; font-weight: 500;">Physical Navigation Mode</span>
-                        </label>
-                        <div style="font-size: 10px; color: #64748b; margin-top: 4px; margin-left: 20px;">
-                            ✓ No rate limiting • Slower • Visible page changes
+                    <div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-weight: 600; color: #333; font-size: 12px;">Mode:</span>
+                            <button id="modeHelpBtn" style="
+                                background: #6c757d;
+                                color: white;
+                                border: none;
+                                border-radius: 12px;
+                                width: 20px;
+                                height: 20px;
+                                font-size: 12px;
+                                font-weight: bold;
+                                cursor: pointer;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                padding: 0;
+                            ">?</button>
                         </div>
+                        <label style="display: flex; align-items: start; cursor: pointer; font-size: 11px; margin-bottom: 8px;">
+                            <input type="radio" name="navMode" id="physicalModeRadio" value="physical" checked style="margin-right: 8px; margin-top: 2px;">
+                            <div>
+                                <div style="color: #0369a1; font-weight: 500; margin-bottom: 2px;">Physical Navigation</div>
+                                <div style="color: #64748b; font-size: 10px;">✓ No rate limiting • Slower • Visible changes</div>
+                            </div>
+                        </label>
+                        <label style="display: flex; align-items: start; cursor: pointer; font-size: 11px;">
+                            <input type="radio" name="navMode" id="behindScenesModeRadio" value="behind-scenes" style="margin-right: 8px; margin-top: 2px;">
+                            <div>
+                                <div style="color: #856404; font-weight: 500; margin-bottom: 2px;">Behind-the-Scenes</div>
+                                <div style="color: #856404; font-size: 10px;">~9 patients, then 90s pause • ~25s/patient</div>
+                            </div>
+                        </label>
                     </div>
-                    <div style="margin-bottom: 8px; padding: 6px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">
-                        <div style="font-size: 10px; color: #856404;">
-                            Behind-scenes: ~9 patients, then 90s pause. ~25s/patient
+                    <div id="modeHelpPanel" style="display: none; margin-bottom: 10px; padding: 10px; background: #e7f3ff; border: 1px solid #0284c7; border-radius: 4px; font-size: 11px; line-height: 1.5;">
+                        <div style="font-weight: 600; color: #0369a1; margin-bottom: 6px;">Mode Comparison:</div>
+                        <div style="margin-bottom: 8px;">
+                            <div style="font-weight: 500; color: #0369a1;">Physical Navigation:</div>
+                            <div style="color: #475569; margin-left: 8px;">
+                                • Actually clicks and navigates pages<br>
+                                • You'll see browser activity<br>
+                                • No rate limiting issues<br>
+                                • Slower but more reliable<br>
+                                • <strong>Recommended</strong>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="font-weight: 500; color: #856404;">Behind-the-Scenes:</div>
+                            <div style="color: #475569; margin-left: 8px;">
+                                • Works in hidden iframes<br>
+                                • Browser looks idle<br>
+                                • Rate limited after ~9 patients<br>
+                                • Faster but requires pauses<br>
+                                • Use for small batches
+                            </div>
                         </div>
                     </div>
                     <div style="display: flex; gap: 8px;">
@@ -1235,6 +1475,18 @@ Next Appt: ${appointment}
             this.style.backgroundColor = '#f44336';
         });
 
+        // Help button toggle
+        document.getElementById('modeHelpBtn').addEventListener('click', function() {
+            const helpPanel = document.getElementById('modeHelpPanel');
+            if (helpPanel.style.display === 'none') {
+                helpPanel.style.display = 'block';
+                this.style.backgroundColor = '#0284c7';
+            } else {
+                helpPanel.style.display = 'none';
+                this.style.backgroundColor = '#6c757d';
+            }
+        });
+
         statusPanel = panel;
         return panel;
     }
@@ -1266,6 +1518,7 @@ Next Appt: ${appointment}
         GM_setValue(CSV_KEY, '[]');
         GM_setValue(COPAY_DATA_KEY, '{}');
         GM_setValue(INSURANCE_LEVEL_KEY, 'primary');
+        GM_setValue(PENDING_START_KEY, 'false');
 
         updateStatus({ task: 'Stopped by user - downloading CSV...' });
 
@@ -1347,8 +1600,10 @@ Next Appt: ${appointment}
 
         // Ensure ALL RESOURCES is selected - if changed, page will auto-reload
         if (setAllResources()) {
-            console.log('Switched to ALL RESOURCES, waiting for page reload...');
-            // Page will reload automatically, no need to alert
+            console.log('Switched to ALL RESOURCES, setting pending start flag...');
+            // Set flag to auto-start after page reload
+            GM_setValue(PENDING_START_KEY, 'true');
+            // Page will reload automatically, workflow will resume
             return;
         }
 
@@ -1372,7 +1627,7 @@ Next Appt: ${appointment}
         return new Promise((resolve) => {
             document.getElementById('startProcessing').onclick = () => {
                 const rangeInput = document.getElementById('rangeInput').value;
-                const usePhysical = document.getElementById('physicalNavToggle').checked;
+                const usePhysical = document.getElementById('physicalModeRadio').checked;
 
                 if (usePhysical) {
                     processPatientRangePhysical(allPatients, rangeInput);
@@ -1396,7 +1651,7 @@ Next Appt: ${appointment}
     }
 
     // Function to input copay and coinsurance for a patient
-    async function inputCopayCoinsurance(patient, pcCopay, pcCoins, ucCopay, ucCoins) {
+    async function inputCopayCoinsurance(patient, pcCopay, pcCoins, ucCopay, ucCoins, guarantorBalance, nextAppointment) {
         return new Promise((resolve, reject) => {
             // Create hidden iframe to navigate through insurance pages
             const iframe = document.createElement('iframe');
@@ -1421,21 +1676,10 @@ Next Appt: ${appointment}
                     console.log(`[Behind-scenes] Step ${currentStep}: ${steps[currentStep]}`);
 
                     if (currentStep === 0) {
-                        // Step 1: Patient chart loaded, check if we need to add alert
+                        // Step 1: Patient chart loaded, navigate to alert or patient info
                         setTimeout(() => {
                             try {
-                                // Scrape Guarantor Balance before navigating
-                                let guarantorBalance = '';
-                                const balanceCell = iframeDoc.querySelector('td.dataTotal');
-                                if (balanceCell) {
-                                    guarantorBalance = balanceCell.textContent.trim();
-                                    console.log(`[Behind-scenes] Found Guarantor Balance: ${guarantorBalance}`);
-                                } else {
-                                    console.warn('[Behind-scenes] Guarantor Balance not found, will show N/A in alert');
-                                }
-
-                                // Store balance temporarily (will be added to copay data in next step)
-                                iframe.dataset.guarantorBalance = guarantorBalance;
+                                // Use balance and appointment passed as parameters (already extracted via GM_xmlhttpRequest)
 
                                 if (ALERT_CONFIG.ENABLE_ALERT_NOTES) {
                                     // Click "New Alert"
@@ -1457,14 +1701,14 @@ Next Appt: ${appointment}
                         // Step 2: New alert page loaded, fill in alert message
                         setTimeout(() => {
                             try {
-                                // Format alert message with guarantor balance
-                                const guarantorBalance = iframe.dataset.guarantorBalance || '';
+                                // Format alert message with balance and appointment (passed as parameters)
                                 const copayData = {
                                     primaryCopay: pcCopay,
                                     primaryCoins: pcCoins,
                                     urgentCopay: ucCopay,
                                     urgentCoins: ucCoins,
-                                    guarantorBalance: guarantorBalance
+                                    guarantorBalance: guarantorBalance || '$0.00',
+                                    nextAppointment: nextAppointment || 'No appointment found'
                                 };
                                 const alertMessage = formatCopayAlert(copayData);
 
@@ -1594,7 +1838,11 @@ Next Appt: ${appointment}
                                 setTimeout(() => {
                                     clearTimeout(timeout);
                                     if (iframe.parentNode) document.body.removeChild(iframe);
-                                    resolve();
+                                    // Return balance and appointment data (from parameters)
+                                    resolve({
+                                        guarantorBalance: guarantorBalance || '',
+                                        nextAppointment: nextAppointment || ''
+                                    });
                                 }, 2000);
 
                             } catch (e) {
@@ -1670,7 +1918,7 @@ Next Appt: ${appointment}
         isRunning = true;
         shouldStop = false;
         processedPatients = [];
-        csvData = [['Patient Name', 'Member ID', 'Appointment Time', 'Provider', 'Status', 'PDF URL', 'Primary Copay', 'Primary Coinsurance', 'Urgent Care Copay', 'Urgent Care Coinsurance', 'Verification Status', 'Error']];
+        csvData = [['Patient Name', 'Member ID', 'Appointment Time', 'Provider', 'Status', 'Primary Copay', 'Primary Coinsurance', 'Urgent Care Copay', 'Urgent Care Coinsurance', 'Balance', 'Verification Status', 'Error']];
 
         const button = document.getElementById('insuranceVerifyBtn');
         button.disabled = true;
@@ -1719,11 +1967,11 @@ Next Appt: ${appointment}
                         result.patient.appointmentTime || '',
                         result.patient.provider || '',
                         result.patient.status || '',
-                        result.fullUrl,
                         result.copayData?.primaryCopay || '',
                         result.copayData?.primaryCoins || '',
                         result.copayData?.urgentCopay || '',
                         result.copayData?.urgentCoins || '',
+                        result.copayData?.guarantorBalance || '',
                         'Success',
                         result.pdfError || ''
                     ]);
@@ -1735,11 +1983,11 @@ Next Appt: ${appointment}
                         result.patient.appointmentTime || '',
                         result.patient.provider || '',
                         result.patient.status || '',
-                        '',
                         '', // Primary Copay
                         '', // Primary Coinsurance
-                        '', // Secondary Copay
-                        '', // Secondary Coinsurance
+                        '', // Urgent Care Copay
+                        '', // Urgent Care Coinsurance
+                        '', // Balance
                         'Failed',
                         result.error
                     ]);
@@ -1783,11 +2031,10 @@ Next Appt: ${appointment}
             task: shouldStop ? '⚠ Stopped - CSV exported with partial results' : '✓ All done! CSV exported.',
         });
 
-        const message = shouldStop
-            ? `Verification stopped!\nProcessed ${completedCount} of ${patients.length} patients.\nCSV file downloaded with results so far.`
-            : `Verification complete! Processed ${patients.length} patients.\nFirst ${CONFIG.DOWNLOAD_FIRST_N_PDFS} PDFs downloaded.\nCSV file downloaded with all results.`;
-
-        alert(message);
+        // Auto-hide status panel after completion
+        setTimeout(() => {
+            hideStatusPanel();
+        }, 3000);
 
         resetButton();
     }
@@ -1870,7 +2117,7 @@ Next Appt: ${appointment}
         GM_setValue(STATE_KEY, 'verify_patient');
         GM_setValue(PATIENTS_KEY, JSON.stringify(patients));
         GM_setValue(INDEX_KEY, 0);
-        GM_setValue(CSV_KEY, JSON.stringify([['Patient Name', 'Member ID', 'Appointment Time', 'Provider', 'Status', 'PDF URL', 'Primary Copay', 'Primary Coinsurance', 'Urgent Care Copay', 'Urgent Care Coinsurance', 'Verification Status', 'Error']]));
+        GM_setValue(CSV_KEY, JSON.stringify([['Patient Name', 'Member ID', 'Appointment Time', 'Provider', 'Status', 'Primary Copay', 'Primary Coinsurance', 'Urgent Care Copay', 'Urgent Care Coinsurance', 'Balance', 'Verification Status', 'Error']]));
 
         // Start with first patient
         startPhysicalVerification(patients[0], 0, patients.length);
@@ -2088,8 +2335,7 @@ Next Appt: ${appointment}
                             patient.appointmentTime || '',
                             patient.provider || '',
                             patient.status || '',
-                            '',
-                            '', '', '', '',
+                            '', '', '', '', '',
                             'Failed',
                             'PDF link never appeared'
                         ]);
@@ -2133,8 +2379,7 @@ Next Appt: ${appointment}
                         patient.appointmentTime || '',
                         patient.provider || '',
                         patient.status || '',
-                        '',
-                        '', '', '', '',
+                        '', '', '', '', '',
                         'Failed',
                         'PDF link not found'
                     ]);
@@ -2156,8 +2401,7 @@ Next Appt: ${appointment}
                         patient.appointmentTime || '',
                         patient.provider || '',
                         patient.status || '',
-                        '',
-                        '', '', '', '',
+                        '', '', '', '', '',
                         'Failed',
                         'Could not extract PDF URL'
                     ]);
@@ -2226,11 +2470,11 @@ Next Appt: ${appointment}
                         patient.appointmentTime || '',
                         patient.provider || '',
                         patient.status || '',
-                        fullUrl,
                         primaryCopay || '',
                         primaryCoins || '',
                         urgentCopay || '',
                         urgentCoins || '',
+                        guarantorBalance || '',
                         'Success',
                         ''
                     ]);
@@ -2295,8 +2539,7 @@ Next Appt: ${appointment}
                         patient.appointmentTime || '',
                         patient.provider || '',
                         patient.status || '',
-                        fullUrl,
-                        '', '', '', '',
+                        '', '', '', '', '',
                         'Failed',
                         pdfError.message
                     ]);
@@ -3003,6 +3246,20 @@ Next Appt: ${appointment}
     function init() {
         if (isAppointmentsPage()) {
             addVerifyButton();
+
+            // Check if we're pending start after ALL RESOURCES reload
+            const pendingStart = GM_getValue(PENDING_START_KEY, 'false');
+            if (pendingStart === 'true') {
+                console.log('Pending start detected, auto-clicking Verify button...');
+                GM_setValue(PENDING_START_KEY, 'false'); // Clear flag
+                // Auto-click the button after a short delay to ensure page is fully loaded
+                setTimeout(() => {
+                    const verifyButton = document.getElementById('verifyAllInsurance');
+                    if (verifyButton) {
+                        verifyButton.click();
+                    }
+                }, 1500);
+            }
         }
 
         // Auto-resume physical navigation workflow if in progress
