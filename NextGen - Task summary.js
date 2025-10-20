@@ -4,8 +4,8 @@
 // @version      4.0
 // @description  Export task summaries from Deleted and Inbox views as pivot table CSV
 // @match        https://*.healthfusionclaims.com/*
-// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/Task%20summary.js
-// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/Task%20summary.js
+// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20-%20Task%20summary.js
+// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20-%20Task%20summary.js
 // @license      MIT
 // @copyright    2025, David Luebbert, MD
 // @grant        none
