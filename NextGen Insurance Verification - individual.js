@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         ZZ NextGen Insurance Verification - individual
+// @name         NextGen Insurance Verification (Single Patient)
 // @namespace    https://pilatus.app/tm
-// @version      2.7.7
+// @version      2.7.9
 // @description  Automatically extract copay from eligibility PDF, check secondary if needed, create alert, and fill in insurance form
 // @author       David Luebbert, MD
 // @match        https://*.healthfusionclaims.com/*
