@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         NextGen - Task Summary Exporter
 // @namespace    http://tampermonkey.net/
-// @version      4.0
+// @version      4.2
 // @description  Export task summaries from Deleted and Inbox views as pivot table CSV
 // @match        https://*.healthfusionclaims.com/*
-// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20-%20Task%20summary.js
-// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20-%20Task%20summary.js
+// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/Task%20summary.js
+// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/Task%20summary.js
 // @license      MIT
 // @copyright    2025, David Luebbert, MD
 // @grant        none
@@ -89,6 +89,14 @@
             <input type="checkbox" id="includeInbox" checked> Inbox Method
           </label>
         </div>
+        <div>
+          <label style="display:block;margin-bottom:4px;">
+            <input type="radio" name="statusMode" id="combineStatuses" checked> Combine Statuses
+          </label>
+          <label style="display:block;">
+            <input type="radio" name="statusMode" id="separateStatuses"> Separate by Status
+          </label>
+        </div>
       </div>
       <div style="display:flex;gap:6px;margin-bottom:6px;">
         <button id="startExportBtn" style="flex:1;background:#1976d2;color:#fff;border:none;border-radius:6px;padding:6px;cursor:pointer;">Start Export</button>
@@ -163,25 +171,11 @@
       log('Selected Priority: All');
     }
 
-    // Unselect Forwarded if selected
-    const forwarded = document.querySelector('#stusForwarded');
-    if (forwarded && forwarded.classList.contains('selected')) {
-      forwarded.click();
-      log('Unselected Forwarded');
-    }
-
-    // Select Accepted by Me
-    const acceptedByMe = document.querySelector('#stusAcceptedByMe');
-    if (acceptedByMe && !acceptedByMe.classList.contains('selected')) {
-      acceptedByMe.click();
-      log('Selected Accepted by Me');
-    }
-
-    // Select Complete
-    const complete = document.querySelector('#stusComplete');
-    if (complete && !complete.classList.contains('selected')) {
-      complete.click();
-      log('Selected Complete');
+    // Select All status
+    const stusAll = document.querySelector('#stusAll');
+    if (stusAll && !stusAll.classList.contains('selected')) {
+      stusAll.click();
+      log('Selected Status: All');
     }
   }
 
@@ -279,6 +273,34 @@
   }
 
   // ---------- CSV Generation ----------
+  function generateTablesForTasks(tasks, dateLabel, separateByStatus) {
+    const tables = [];
+
+    if (!separateByStatus || tasks.length === 0) {
+      // Generate single combined table
+      tables.push(generatePivotTable(tasks, dateLabel));
+    } else {
+      // Group tasks by status
+      const statusGroups = {};
+      for (const task of tasks) {
+        const status = task.status || 'Unknown';
+        if (!statusGroups[status]) {
+          statusGroups[status] = [];
+        }
+        statusGroups[status].push(task);
+      }
+
+      // Generate table for each status
+      const statuses = Object.keys(statusGroups).sort();
+      for (const status of statuses) {
+        const label = `${dateLabel} - Status: ${status}`;
+        tables.push(generatePivotTable(statusGroups[status], label));
+      }
+    }
+
+    return tables;
+  }
+
   function generatePivotTable(tasks, dateLabel) {
     // Get unique owners and task types
     const owners = [...new Set(tasks.map(t => t.owner))].sort();
@@ -491,11 +513,12 @@
         return;
       }
 
-      // Get checkbox states
+      // Get checkbox and radio button states
       const summarizeRange = document.getElementById('summarizeRange')?.checked;
       const individualDates = document.getElementById('individualDates')?.checked;
       const includeDeleted = document.getElementById('includeDeleted')?.checked;
       const includeInbox = document.getElementById('includeInbox')?.checked;
+      const separateByStatus = document.getElementById('separateStatuses')?.checked;
 
       if (!summarizeRange && !individualDates) {
         setStatus('⚠ Please select Summarize Range and/or Individual Dates');
@@ -510,6 +533,7 @@
       log(`Date range: ${startDate} to ${endDate}`);
       log(`Summarize Range: ${summarizeRange}, Individual Dates: ${individualDates}`);
       log(`Include Deleted: ${includeDeleted}, Include Inbox: ${includeInbox}`);
+      log(`Separate by Status: ${separateByStatus}`);
 
       const csvSections = [];
       const allTasksCollected = [];
@@ -527,7 +551,8 @@
         allTasksCollected.push(...rangeTasks);
 
         const rangeLabel = isSameDate ? `Date: ${startDate}` : `Date Range: ${startDate} to ${endDate}`;
-        csvSections.push(generatePivotTable(rangeTasks, rangeLabel));
+        const rangeTables = generateTablesForTasks(rangeTasks, rangeLabel, separateByStatus);
+        csvSections.push(...rangeTables);
 
         setProgress(individualDates ? 40 : 90);
       }
@@ -557,7 +582,14 @@
             allTasksCollected.push(...dateTasks);
           }
 
-          csvSections.push(generatePivotTable(dateTasks, `Date: ${date}`));
+          // Only create table(s) if there are tasks for this date
+          if (dateTasks.length > 0) {
+            const dateTables = generateTablesForTasks(dateTasks, `Date: ${date}`, separateByStatus);
+            csvSections.push(...dateTables);
+            log(`Generated ${dateTables.length} table(s) for ${date} with ${dateTasks.length} tasks`);
+          } else {
+            log(`Skipping table for ${date} - no tasks found`);
+          }
 
           const progressBase = summarizeRange ? 40 : 0;
           const progressRange = summarizeRange ? 50 : 90;
