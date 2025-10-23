@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         NextGen - Task Summary Exporter
 // @namespace    http://tampermonkey.net/
-// @version      4.2
+// @version      4.3
 // @description  Export task summaries from Deleted and Inbox views as pivot table CSV
 // @match        https://*.healthfusionclaims.com/*
-// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20-%20Task%20summary.js
-// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/NextGen%20-%20Task%20summary.js
+// @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/Task%20summary.js
+// @downloadURL  https://github.com/Saentis29/CMG/raw/refs/heads/main/Task%20summary.js
 // @license      MIT
 // @copyright    2025, David Luebbert, MD
 // @grant        none
@@ -126,6 +126,128 @@
   function setProgress(pct) {
     const bar = document.getElementById('progressBar');
     if (bar) bar.style.width = pct + '%';
+  }
+
+  // ---------- Status Grouping UI ----------
+  function getUniqueStatuses(tasks) {
+    const statuses = new Set();
+    for (const task of tasks) {
+      if (task.status) {
+        statuses.add(task.status);
+      }
+    }
+    return Array.from(statuses).sort();
+  }
+
+  function showStatusGroupingUI(statuses) {
+    return new Promise((resolve) => {
+      const bubble = document.getElementById('exportStatusBubble');
+      if (!bubble) {
+        resolve(null);
+        return;
+      }
+
+      // Save current content
+      const originalContent = bubble.innerHTML;
+
+      // Create grouping UI
+      const groupingHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <strong>Group Statuses</strong>
+          <button id="bubbleClose2" style="border:none;background:#eee;border-radius:6px;cursor:pointer;padding:4px 8px;">✕</button>
+        </div>
+        <div style="margin-bottom:12px;max-height:300px;overflow-y:auto;">
+          <p style="margin:0 0 8px 0;font-size:12px;color:#666;">Choose how to group statuses for tables:</p>
+          <div id="statusGroupList"></div>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:12px;">
+          <button id="addGroupBtn" style="flex:1;background:#666;color:#fff;border:none;border-radius:6px;padding:6px;cursor:pointer;font-size:12px;">+ Add Group</button>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button id="continueExportBtn" style="flex:1;background:#1976d2;color:#fff;border:none;border-radius:6px;padding:8px;cursor:pointer;font-weight:bold;">Continue Export</button>
+          <button id="cancelGroupingBtn" style="flex:1;background:#c62828;color:#fff;border:none;border-radius:6px;padding:8px;cursor:pointer;">Cancel</button>
+        </div>
+      `;
+
+      bubble.innerHTML = groupingHTML;
+
+      let availableGroups = ['Group 1'];
+
+      function renderStatusList() {
+        const container = document.getElementById('statusGroupList');
+        container.innerHTML = '';
+
+        statuses.forEach((status, index) => {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;padding:6px;background:#f5f5f5;border-radius:4px;';
+
+          const label = document.createElement('span');
+          label.textContent = status;
+          label.style.cssText = 'font-size:13px;flex:1;';
+
+          const select = document.createElement('select');
+          select.id = `status-${index}`;
+          select.style.cssText = 'padding:4px;border-radius:4px;border:1px solid #ccc;font-size:12px;';
+
+          // Add options
+          availableGroups.forEach(group => {
+            const opt = document.createElement('option');
+            opt.value = group;
+            opt.textContent = group;
+            select.appendChild(opt);
+          });
+
+          const separateOpt = document.createElement('option');
+          separateOpt.value = 'Separate';
+          separateOpt.textContent = 'Separate';
+          select.appendChild(separateOpt);
+
+          // Default to Group 1
+          select.value = 'Group 1';
+
+          row.appendChild(label);
+          row.appendChild(select);
+          container.appendChild(row);
+        });
+      }
+
+      renderStatusList();
+
+      // Add Group button
+      document.getElementById('addGroupBtn').onclick = () => {
+        const nextNum = availableGroups.length + 1;
+        availableGroups.push(`Group ${nextNum}`);
+        renderStatusList();
+        log(`Added Group ${nextNum}`);
+      };
+
+      // Continue button
+      document.getElementById('continueExportBtn').onclick = () => {
+        const grouping = {};
+
+        statuses.forEach((status, index) => {
+          const select = document.getElementById(`status-${index}`);
+          const groupName = select.value;
+          grouping[status] = groupName;
+        });
+
+        log('Status grouping:', grouping);
+        bubble.innerHTML = originalContent;
+        resolve(grouping);
+      };
+
+      // Cancel button
+      document.getElementById('cancelGroupingBtn').onclick = () => {
+        bubble.innerHTML = originalContent;
+        resolve(null);
+      };
+
+      // Close button
+      document.getElementById('bubbleClose2').onclick = () => {
+        bubble.innerHTML = originalContent;
+        resolve(null);
+      };
+    });
   }
 
   // ---------- Button Helpers ----------
@@ -273,14 +395,15 @@
   }
 
   // ---------- CSV Generation ----------
-  function generateTablesForTasks(tasks, dateLabel, separateByStatus) {
+  function generateTablesForTasks(tasks, dateLabel, separateByStatus, customGrouping = null) {
     const tables = [];
 
-    if (!separateByStatus || tasks.length === 0) {
-      // Generate single combined table
-      tables.push(generatePivotTable(tasks, dateLabel));
-    } else {
-      // Group tasks by status
+    if (tasks.length === 0) {
+      return tables;
+    }
+
+    if (separateByStatus) {
+      // SEPARATE BY STATUS: Always create individual tables for each status
       const statusGroups = {};
       for (const task of tasks) {
         const status = task.status || 'Unknown';
@@ -296,6 +419,61 @@
         const label = `${dateLabel} - Status: ${status}`;
         tables.push(generatePivotTable(statusGroups[status], label));
       }
+    } else if (customGrouping) {
+      // COMBINE STATUSES: Use custom grouping from UI
+      const groups = {};
+
+      // First, group tasks by their assigned group name
+      for (const task of tasks) {
+        const status = task.status || 'Unknown';
+        const groupName = customGrouping[status] || 'Group 1';
+
+        if (!groups[groupName]) {
+          groups[groupName] = [];
+        }
+        groups[groupName].push(task);
+      }
+
+      // Generate table for each group
+      const groupNames = Object.keys(groups).sort((a, b) => {
+        // Sort so "Group X" comes before "Separate"
+        if (a.startsWith('Group') && b === 'Separate') return -1;
+        if (a === 'Separate' && b.startsWith('Group')) return 1;
+        return a.localeCompare(b);
+      });
+
+      for (const groupName of groupNames) {
+        if (groupName === 'Separate') {
+          // Each status in "Separate" gets its own table
+          const separateTasks = groups[groupName];
+          const statusGroups = {};
+
+          for (const task of separateTasks) {
+            const status = task.status || 'Unknown';
+            if (!statusGroups[status]) {
+              statusGroups[status] = [];
+            }
+            statusGroups[status].push(task);
+          }
+
+          const statuses = Object.keys(statusGroups).sort();
+          for (const status of statuses) {
+            const label = `${dateLabel} - Status: ${status}`;
+            tables.push(generatePivotTable(statusGroups[status], label));
+          }
+        } else {
+          // Combined table for this group
+          const groupTasks = groups[groupName];
+          const statuses = [...new Set(groupTasks.map(t => t.status || 'Unknown'))].sort();
+          const statusList = statuses.join(', ');
+          const label = `${dateLabel} - ${groupName} (${statusList})`;
+          tables.push(generatePivotTable(groupTasks, label));
+        }
+      }
+    } else {
+      // COMBINE STATUSES (no custom grouping - shouldn't happen but fallback)
+      // Generate single combined table with all tasks
+      tables.push(generatePivotTable(tasks, dateLabel));
     }
 
     return tables;
@@ -539,21 +717,21 @@
       const allTasksCollected = [];
       const isSameDate = startDate === endDate;
 
+      // Store scraped data for later table generation
+      let rangeTasks = null;
+      let individualDateTasks = [];
+
+      // PHASE 1: SCRAPING - Collect all tasks first
       // If Summarize Range is checked (and not same date, or only this option is checked)
       if (summarizeRange && (!isSameDate || !individualDates)) {
         setStatus('Scraping range summary...');
-        const rangeTasks = await scrapeForDateRange(startDate, endDate, includeDeleted, includeInbox);
+        rangeTasks = await scrapeForDateRange(startDate, endDate, includeDeleted, includeInbox);
         if (!rangeTasks) {
           setStatus('Export stopped.');
           return;
         }
 
         allTasksCollected.push(...rangeTasks);
-
-        const rangeLabel = isSameDate ? `Date: ${startDate}` : `Date Range: ${startDate} to ${endDate}`;
-        const rangeTables = generateTablesForTasks(rangeTasks, rangeLabel, separateByStatus);
-        csvSections.push(...rangeTables);
-
         setProgress(individualDates ? 40 : 90);
       }
 
@@ -569,7 +747,7 @@
           }
 
           const date = dates[i];
-          setStatus(`Processing date ${i + 1}/${dates.length}: ${date}`);
+          setStatus(`Scraping date ${i + 1}/${dates.length}: ${date}`);
 
           const dateTasks = await scrapeForDateRange(date, date, includeDeleted, includeInbox);
           if (!dateTasks) {
@@ -577,18 +755,12 @@
             return;
           }
 
+          // Store for later table generation
+          individualDateTasks.push({ date, tasks: dateTasks });
+
           // Only add to all tasks if we didn't already collect them in range summary
           if (!summarizeRange || isSameDate) {
             allTasksCollected.push(...dateTasks);
-          }
-
-          // Only create table(s) if there are tasks for this date
-          if (dateTasks.length > 0) {
-            const dateTables = generateTablesForTasks(dateTasks, `Date: ${date}`, separateByStatus);
-            csvSections.push(...dateTables);
-            log(`Generated ${dateTables.length} table(s) for ${date} with ${dateTasks.length} tasks`);
-          } else {
-            log(`Skipping table for ${date} - no tasks found`);
           }
 
           const progressBase = summarizeRange ? 40 : 0;
@@ -597,14 +769,60 @@
         }
       }
 
-      // Add task list at the end
-      if (allTasksCollected.length > 0) {
-        csvSections.push(generateTaskList(allTasksCollected));
-      } else {
+      // Check if we have any tasks
+      if (allTasksCollected.length === 0) {
         setStatus('No tasks found.');
         setProgress(0);
         return;
       }
+
+      // PHASE 2: STATUS GROUPING UI (if needed)
+      let customGrouping = null;
+      if (!separateByStatus) {
+        // Combine Statuses is selected - show UI to let user choose groupings
+        const uniqueStatuses = getUniqueStatuses(allTasksCollected);
+        log(`Found ${uniqueStatuses.length} unique statuses:`, uniqueStatuses);
+
+        setStatus('Please configure status grouping...');
+        setProgress(92);
+
+        customGrouping = await showStatusGroupingUI(uniqueStatuses);
+
+        if (!customGrouping) {
+          setStatus('Export cancelled.');
+          setProgress(0);
+          return;
+        }
+
+        log('Status grouping configured:', customGrouping);
+      }
+
+      // PHASE 3: TABLE GENERATION
+      setStatus('Generating tables...');
+      setProgress(95);
+
+      // Generate tables for range summary (if we scraped it)
+      if (rangeTasks) {
+        const rangeLabel = isSameDate ? `Date: ${startDate}` : `Date Range: ${startDate} to ${endDate}`;
+        const rangeTables = generateTablesForTasks(rangeTasks, rangeLabel, separateByStatus, customGrouping);
+        csvSections.push(...rangeTables);
+        log(`Generated ${rangeTables.length} table(s) for range summary with ${rangeTasks.length} tasks`);
+      }
+
+      // Generate tables for individual dates (if we scraped them)
+      for (const { date, tasks } of individualDateTasks) {
+        // Only create table(s) if there are tasks for this date
+        if (tasks.length > 0) {
+          const dateTables = generateTablesForTasks(tasks, `Date: ${date}`, separateByStatus, customGrouping);
+          csvSections.push(...dateTables);
+          log(`Generated ${dateTables.length} table(s) for ${date} with ${tasks.length} tasks`);
+        } else {
+          log(`Skipping table for ${date} - no tasks found`);
+        }
+      }
+
+      // Add task list at the end
+      csvSections.push(generateTaskList(allTasksCollected));
 
       // Combine all sections (each section already has 2 blank rows at the end)
       const csv = csvSections.map(section => section.join('\n')).join('\n');
