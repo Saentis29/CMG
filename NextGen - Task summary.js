@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NextGen - Task Summary Exporter
 // @namespace    http://tampermonkey.net/
-// @version      4.3
+// @version      4.4
 // @description  Export task summaries from Deleted and Inbox views as pivot table CSV
 // @match        https://*.healthfusionclaims.com/*
 // @updateURL    https://github.com/Saentis29/CMG/raw/refs/heads/main/Task%20summary.js
@@ -64,7 +64,7 @@
     bubble.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
         <strong>Task Summary Exporter</strong>
-        <button id="bubbleClose" style="border:none;background:#eee;border-radius:6px;cursor:pointer;">✕</button>
+        <button id="bubbleClose" style="border:none;background:#eee;border-radius:6px;cursor:pointer;padding:4px 8px;font-size:16px;">✕</button>
       </div>
       <div style="margin-bottom:6px;">
         <strong>Date Range:</strong><br>
@@ -137,6 +137,36 @@
       }
     }
     return Array.from(statuses).sort();
+  }
+
+  function deduplicateTasks(tasks) {
+    const seen = new Set();
+    const unique = [];
+
+    for (const task of tasks) {
+      // Create a unique key based on all identifying fields
+      const key = [
+        task.from || '',
+        task.owner || '',
+        task.received || '',
+        task.taskType || '',
+        task.subject || '',
+        task.patient || '',
+        task.status || ''
+      ].join('|');
+
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(task);
+      }
+    }
+
+    const duplicatesRemoved = tasks.length - unique.length;
+    if (duplicatesRemoved > 0) {
+      log(`Removed ${duplicatesRemoved} duplicate task(s)`);
+    }
+
+    return unique;
   }
 
   function showStatusGroupingUI(statuses) {
@@ -774,6 +804,21 @@
         setStatus('No tasks found.');
         setProgress(0);
         return;
+      }
+
+      // Deduplicate tasks
+      log(`Total tasks collected: ${allTasksCollected.length}`);
+      const originalTaskCount = allTasksCollected.length;
+      const deduplicated = deduplicateTasks(allTasksCollected);
+      allTasksCollected.length = 0;
+      allTasksCollected.push(...deduplicated);
+
+      // Also deduplicate rangeTasks and individualDateTasks
+      if (rangeTasks) {
+        rangeTasks = deduplicateTasks(rangeTasks);
+      }
+      for (let i = 0; i < individualDateTasks.length; i++) {
+        individualDateTasks[i].tasks = deduplicateTasks(individualDateTasks[i].tasks);
       }
 
       // PHASE 2: STATUS GROUPING UI (if needed)
